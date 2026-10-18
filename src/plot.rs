@@ -24,6 +24,7 @@ const PARK: usize = 2048;
 // Coarse batches amortize worker-pool scheduling on many-core CPUs. Keeping the
 // work and result buffers below ~14 MiB still leaves disk-mode memory bounded.
 const BATCH: usize = 65536;
+const MATCH_CHUNK: usize = 1024;
 const HEADER_SIZE: u64 = 4096;
 
 #[derive(Clone)]
@@ -311,47 +312,147 @@ fn run(options: &Options) -> Result<PlotResult> {
     Ok(PlotResult { path, header })
 }
 
-#[derive(Clone)]
-struct Match {
-    left: [u32; 14],
-    right: [u32; 14],
-    l: u64,
-    r: u64,
+fn hash_pair(left: &[u32; 14], right: &[u32; 14], l: u64, r: u64, mask: u32) -> Entry {
+    let mut message = [0; 112];
+    for (dst, word) in message.chunks_exact_mut(4).zip(left.iter().chain(right)) {
+        dst.copy_from_slice(&word.to_le_bytes());
+    }
+    let hash = Sha512::digest(message);
+    let mut y = 0;
+    let mut meta = [0; 14];
+    for (dst, bytes) in meta.iter_mut().zip(hash.chunks_exact(4)) {
+        let word = u32::from_le_bytes(bytes.try_into().unwrap());
+        y ^= word;
+        *dst = word & mask;
+    }
+    Entry {
+        y: y & mask,
+        meta,
+        left: l,
+        right: r,
+    }
 }
-fn hash_matches(batch: &mut Vec<Match>, sorter: &mut Sorter<'_>, ksize: u8) -> Result<()> {
-    let mask = ((1u64 << ksize) - 1) as u32;
-    let entries: Vec<_> = batch
-        .par_iter()
-        .with_min_len(256)
-        .map(|pair| {
-            let mut message = [0; 112];
-            for (dst, word) in message
-                .chunks_exact_mut(4)
-                .zip(pair.left.iter().chain(&pair.right))
-            {
-                dst.copy_from_slice(&word.to_le_bytes());
-            }
-            let hash = Sha512::digest(message);
-            let mut y = 0;
-            let mut meta = [0; 14];
-            for (dst, bytes) in meta.iter_mut().zip(hash.chunks_exact(4)) {
-                let word = u32::from_le_bytes(bytes.try_into().unwrap());
-                y ^= word;
-                *dst = word & mask;
-            }
-            Entry {
-                y: y & mask,
-                meta,
-                left: pair.l,
-                right: pair.r,
-            }
+fn right_matches(entries: &[Entry], index: usize) -> std::ops::Range<usize> {
+    let Some(target) = entries[index].y.checked_add(1) else {
+        return index..index;
+    };
+    let mut begin = index + 1;
+    while begin < entries.len() && entries[begin].y < target {
+        begin += 1;
+    }
+    let mut end = begin;
+    while end < entries.len() && entries[end].y == target {
+        end += 1;
+    }
+    begin..end
+}
+fn compute_matches(
+    entries: &[Entry],
+    left_len: usize,
+    base: u64,
+    table: usize,
+    options: &Options,
+) -> Result<Vec<Entry>> {
+    let counts: Vec<usize> = entries[..left_len]
+        .par_chunks(MATCH_CHUNK)
+        .enumerate()
+        .map(|(chunk, rows)| {
+            (chunk * MATCH_CHUNK..chunk * MATCH_CHUNK + rows.len())
+                .map(|i| right_matches(entries, i).len())
+                .sum()
         })
         .collect();
-    for entry in entries {
-        sorter.push(entry)?;
+    check_cancel(options)?;
+    let mut prefix = Vec::with_capacity(counts.len() + 1);
+    prefix.push(0usize);
+    for count in counts {
+        prefix.push(
+            prefix
+                .last()
+                .unwrap()
+                .checked_add(count)
+                .context("too many matches")?,
+        );
     }
-    batch.clear();
-    Ok(())
+    let mut output = Vec::new();
+    output.try_reserve_exact(*prefix.last().unwrap())?;
+    output.resize(
+        *prefix.last().unwrap(),
+        Entry {
+            y: 0,
+            meta: [0; 14],
+            left: 0,
+            right: 0,
+        },
+    );
+    MatchInput {
+        entries,
+        left_len,
+        base,
+        table,
+        options,
+    }
+    .fill(&prefix, 0, &mut output)?;
+    Ok(output)
+}
+struct MatchInput<'a> {
+    entries: &'a [Entry],
+    left_len: usize,
+    base: u64,
+    table: usize,
+    options: &'a Options,
+}
+impl MatchInput<'_> {
+    fn fill(&self, prefix: &[usize], chunk: usize, output: &mut [Entry]) -> Result<()> {
+        let Self {
+            entries,
+            left_len,
+            base,
+            table,
+            options,
+        } = *self;
+        check_cancel(options)?;
+        if prefix.len() <= 2 {
+            let mut offset = 0;
+            let mask = ((1u64 << options.ksize) - 1) as u32;
+            for li in chunk * MATCH_CHUNK..((chunk + 1) * MATCH_CHUNK).min(left_len) {
+                if li % 4096 == 0 {
+                    check_cancel(options)?;
+                }
+                let left = &entries[li];
+                for ri in right_matches(entries, li) {
+                    let right = &entries[ri];
+                    output[offset] = hash_pair(
+                        &left.meta,
+                        &right.meta,
+                        if table == 2 {
+                            left.left
+                        } else {
+                            base + li as u64
+                        },
+                        if table == 2 {
+                            right.left
+                        } else {
+                            base + ri as u64
+                        },
+                        mask,
+                    );
+                    offset += 1;
+                }
+            }
+            debug_assert_eq!(offset, output.len());
+            return Ok(());
+        }
+        let middle = (prefix.len() - 1) / 2;
+        let (left, right) = output.split_at_mut(prefix[middle] - prefix[0]);
+        let (a, b) = rayon::join(
+            || self.fill(&prefix[..=middle], chunk, left),
+            || self.fill(&prefix[middle..], chunk + middle, right),
+        );
+        a?;
+        b?;
+        Ok(())
+    }
 }
 fn match_table(
     storage: &Storage,
@@ -359,16 +460,26 @@ fn match_table(
     table: usize,
     options: &Options,
 ) -> Result<(SortedTable, Option<Table>)> {
+    if let Some(entries) = previous.as_slice() {
+        let started = Instant::now();
+        let output = compute_matches(entries, entries.len(), 0, table, options)?;
+        eprintln!(
+            "T{table}: matched {} entries in {:.1}s; sorting",
+            output.len(),
+            started.elapsed().as_secs_f64()
+        );
+        let links = if table > 2 {
+            Some(extract_links(storage, &previous)?)
+        } else {
+            None
+        };
+        drop(previous);
+        return Ok((SortedTable::from_ram(output), links));
+    }
     let mut reader = previous.reader()?;
     let mut pending = reader.next()?;
     let mut index = 0;
     let mut sorter = Sorter::new(storage);
-    // Uniform Y buckets yield n² / 2^k matches. Reserve a little headroom
-    // without retaining twice the required table memory.
-    let expected = (previous.count as u128 * previous.count as u128 * 105)
-        .div_ceil((1u128 << options.ksize) * 100);
-    sorter.reserve_expected(expected.try_into()?)?;
-    let mut batch = Vec::with_capacity(BATCH);
     // Preserve backtraces during the matching read instead of rereading the
     // entire metadata table just to extract its two pointers.
     let (link_data, mut link_writer) = if table > 2 {
@@ -377,51 +488,54 @@ fn match_table(
     } else {
         (None, None)
     };
-    let mut left = Vec::new();
-    let mut right = Vec::new();
-    read_group(
-        &mut reader,
-        &mut pending,
-        &mut index,
-        &mut link_writer,
-        &mut left,
-    )?;
+    let mut group = Vec::new();
+    let mut carry = Vec::new();
+    let mut work = Vec::with_capacity(BATCH + 256);
+    let mut base = 0u64;
     let mut report = Instant::now();
-    while !left.is_empty() {
+    loop {
         check_cancel(options)?;
+        work.clear();
+        work.extend(carry.iter().map(|(_, entry)| *entry));
+        while work.len() < BATCH {
+            read_group(
+                &mut reader,
+                &mut pending,
+                &mut index,
+                &mut link_writer,
+                &mut group,
+            )?;
+            if group.is_empty() {
+                break;
+            }
+            work.extend(group.iter().map(|(_, entry)| *entry));
+        }
+        if work.is_empty() {
+            break;
+        }
+        let left_len = work.len();
+        // Include the complete following Y group. It supplies right matches at
+        // this chunk's edge and becomes the first left group of the next chunk.
         read_group(
             &mut reader,
             &mut pending,
             &mut index,
             &mut link_writer,
-            &mut right,
+            &mut carry,
         )?;
-        if !right.is_empty() && left[0].1.y.checked_add(1) == Some(right[0].1.y) {
-            for &(li, l) in &left {
-                for &(ri, r) in &right {
-                    batch.push(Match {
-                        left: l.meta,
-                        right: r.meta,
-                        l: if table == 2 { l.left } else { li },
-                        r: if table == 2 { r.left } else { ri },
-                    });
-                    if batch.len() == BATCH {
-                        hash_matches(&mut batch, &mut sorter, options.ksize)?;
-                        check_cancel(options)?;
-                    }
-                }
-            }
+        work.extend(carry.iter().map(|(_, entry)| *entry));
+        for entry in compute_matches(&work, left_len, base, table, options)? {
+            sorter.push(entry)?;
         }
-        std::mem::swap(&mut left, &mut right);
+        base += left_len as u64;
         if report.elapsed().as_secs() >= 15 {
             eprintln!(
                 "T{table}: matched {:.1}% of input",
-                index as f64 * 100. / previous.count as f64
+                base as f64 * 100. / previous.count as f64
             );
             report = Instant::now();
         }
     }
-    hash_matches(&mut batch, &mut sorter, options.ksize)?;
     if let Some(writer) = &mut link_writer {
         writer.flush()?;
     }
@@ -478,8 +592,10 @@ fn extract_links(storage: &Storage, table: &SortedTable) -> Result<Table> {
     })
 }
 fn write_pair(writer: &mut dyn Write, left: u64, right: u64) -> Result<()> {
-    writer.write_all(&left.to_le_bytes())?;
-    writer.write_all(&right.to_le_bytes())?;
+    let mut bytes = [0; 16];
+    bytes[..8].copy_from_slice(&left.to_le_bytes());
+    bytes[8..].copy_from_slice(&right.to_le_bytes());
+    writer.write_all(&bytes)?;
     Ok(())
 }
 fn read_pair(reader: &mut dyn Read) -> Result<(u64, u64)> {
@@ -622,4 +738,78 @@ fn write_x(
         output.write_all(&bytes)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod matching_tests {
+    use super::*;
+
+    #[test]
+    fn disk_chunks_preserve_matches_and_global_pointers_across_y_group_boundaries() {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap()
+            .install(|| {
+                let dir = tempfile::tempdir().unwrap();
+                let options = Options {
+                    ksize: 17,
+                    farmer_key: [0; 33],
+                    contract: None,
+                    seed: [0; 32],
+                    mode: Mode::Ram,
+                    ssd: false,
+                    output: dir.path().into(),
+                    temp_dir: dir.path().into(),
+                    threads: 4,
+                    direct_io: false,
+                    allow_small_k: true,
+                    cancelled: Arc::new(AtomicBool::new(false)),
+                };
+                // BATCH ends inside a three-entry Y group. Both the input chunk and
+                // parallel output partition boundaries must retain all its matches.
+                let entries: Vec<_> = (0..BATCH + 13)
+                    .map(|i| Entry {
+                        y: (i / 3) as u32,
+                        meta: [i as u32; 14],
+                        left: i as u64,
+                        right: (i + 1) as u64,
+                    })
+                    .collect();
+                let ram_store = Storage::new(Mode::Ram, dir.path(), false).unwrap();
+                let disk_store = Storage::new(Mode::Disk, dir.path(), false).unwrap();
+                let ram = SortedTable::from_ram(entries.clone());
+                let mut sorter = Sorter::with_limit(&disk_store, BATCH / 4);
+                for entry in entries {
+                    sorter.push(entry).unwrap();
+                }
+                let disk = sorter.finish().unwrap();
+                let (ram, ram_links) = match_table(&ram_store, ram, 3, &options).unwrap();
+                let (disk, disk_links) = match_table(&disk_store, disk, 3, &options).unwrap();
+                assert_eq!(ram.count, disk.count);
+                let mut left = ram.reader().unwrap();
+                let mut right = disk.reader().unwrap();
+                while let Some(entry) = left.next().unwrap() {
+                    assert_eq!(Some(entry), right.next().unwrap());
+                }
+                assert!(right.next().unwrap().is_none());
+                let mut left = Vec::new();
+                let mut right = Vec::new();
+                ram_links
+                    .unwrap()
+                    .data
+                    .reader()
+                    .unwrap()
+                    .read_to_end(&mut left)
+                    .unwrap();
+                disk_links
+                    .unwrap()
+                    .data
+                    .reader()
+                    .unwrap()
+                    .read_to_end(&mut right)
+                    .unwrap();
+                assert_eq!(left, right);
+            });
+    }
 }

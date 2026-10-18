@@ -49,6 +49,9 @@ stacks and the OS's own memory use.
 
 `--mode ram` keeps all temporary tables and sorting allocations in RAM and ignores
 `--temp-dir`. Sorted tables are read directly from their original allocations.
+Matching partitions the exact output into disjoint worker ranges. Disk mode uses
+the same parallel matching on bounded input chunks, carrying a complete Y group
+across each boundary so matches and parent indices remain identical.
 This mode requires substantially more RAM; it does not spill to disk. Temporary
 metadata records use 80 bytes per entry in RAM, and retained backtrace records
 use another 16 bytes per entry per table. Both the current and next tables can
@@ -90,6 +93,9 @@ cargo fmt --all --check
 # Development benchmark: both modes, direct I/O on/off, elapsed time and peak RSS.
 # Checks that every resulting plot has the same SHA-256; cleans up its plots.
 python3 tools/bench_plot.py --ksize 20 --threads 4 --rounds 2
+
+# Isolate CPU leaf hashing from sorting and disk I/O (count, threads).
+cargo run --release --example bench_f1 -- 200000 64
 
 # Optional independent native reader/qualities/full CPU proof check.
 # Requires an existing mmx-node CMake build, with test_pos_compute built.

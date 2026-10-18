@@ -75,6 +75,20 @@ impl EntryReader<'_> {
     }
 }
 impl SortedTable {
+    pub fn as_slice(&self) -> Option<&[Entry]> {
+        match &self.source {
+            SortedSource::Ram(entries) => Some(entries),
+            SortedSource::Stream(_) => None,
+        }
+    }
+    pub fn from_ram(mut entries: Vec<Entry>) -> Self {
+        entries.par_sort_unstable();
+        entries.dedup_by(|a, b| a.same_hash(b));
+        Self {
+            count: entries.len() as u64,
+            source: SortedSource::Ram(entries),
+        }
+    }
     pub fn reader(&self) -> io::Result<EntryReader<'_>> {
         Ok(match &self.source {
             SortedSource::Ram(entries) => EntryReader::Ram(entries.iter()),
@@ -155,12 +169,7 @@ impl<'a> Sorter<'a> {
         if self.storage.is_ram() && self.runs.is_empty() {
             // Keep the sorted allocation itself: no serialization, second table
             // allocation, or copy through byte streams on the full-RAM path.
-            self.entries.par_sort_unstable();
-            self.entries.dedup_by(|a, b| a.same_hash(b));
-            return Ok(SortedTable {
-                count: self.entries.len() as u64,
-                source: SortedSource::Ram(self.entries),
-            });
+            return Ok(SortedTable::from_ram(self.entries));
         }
         self.flush_run()?;
         drop(self.entries);
