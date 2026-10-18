@@ -54,13 +54,16 @@ the same parallel matching on bounded input chunks, carrying a complete Y group
 across each boundary so matches and parent indices remain identical.
 Pruning also streams bounded batches: workers mark shared parent bitmaps with
 atomic bit operations and remap live pointers in parallel, preserving table order.
-This mode requires substantially more RAM; it does not spill to disk. Temporary
+RAM mode requires substantially more RAM; it does not spill to disk. Temporary
 metadata records use 80 bytes per entry in RAM, and retained backtrace records
 use another 16 bytes per entry per table. Both the current and next tables can
-be present during matching. Plan for well over 100 GiB of RAM for k29. Production
-peak RAM, disk space and plotting times have not been benchmarked; small-plot
-measurements are not production sizing guarantees. Disk mode likewise needs
-substantial temporary space because full metadata records use 76 bytes per entry.
+be present during matching. Plan for well over 100 GiB of RAM for k29. On dualv4,
+k29 runs with 64 threads peaked at about 137 GiB in RAM mode and 170–178 MiB in
+disk mode. HDD plotting took 26m30s in RAM or 97m43s on disk, with direct I/O
+enabled. See the [production measurements](docs/dualv4.md) for all four HDD/SSD
+results and their limits. Larger plots have not been measured end-to-end, and
+peak temporary disk space was not measured. Disk mode needs substantial temporary
+space because full metadata records use 76 bytes per entry.
 
 `--direct-io` defaults to enabled. On Linux, temporary file reads/writes and final
 plot writes use `O_DIRECT`, 4 KiB aligned buffers and 1 MiB transfers. Final
@@ -109,8 +112,8 @@ python3 tools/test_matrix.py --ksize 29 --threads 32 \
   --output /plots/test-matrix --native-source ../mmx-node
 ```
 
-One local release-build run at k20 with four worker threads produced identical
-52,179,044-byte plots in every combination:
+An earlier local release-build run at k20 with four worker threads produced
+identical 52,179,044-byte plots in every combination:
 
 | Storage | Direct I/O | Seconds | Peak RSS |
 | --- | --- | ---: | ---: |
@@ -128,9 +131,11 @@ buffered I/O, particularly when the working set fits in the page cache.
 Tests compare native C++ leaf/memory-hash vectors at k8/k16/k29/k32, exact native
 header identities, complete small-plot Y/metadata tables, reconstructed 256-X
 proofs, RAM/disk determinism, multi-pass merge sorting, direct-I/O alignment and
-tail handling, overwrite protection and cancellation. End-to-end native testing
-uses development plots; a production-sized k29–k32 plot has not been generated
-as part of this implementation's validation.
+tail handling, overwrite protection and cancellation. Production k29 HDD and SSD
+plots in both storage modes passed the native reader, quality lookup and full
+CPU verifier on 64 sampled proofs per plot. SHA-256 digests match between RAM
+and disk modes for each format. See the [dualv4 report](docs/dualv4.md) for details.
+k30–k32 have not been plotted end-to-end.
 
 The hashing/proof reference is `mmx-rust-node` and `mmx-node` revision
 `ca6438b37c08007106d58efe4a990f6ecb276649`. `src/pos.rs` and

@@ -1,7 +1,7 @@
 # dualv4 production validation
 
 Measurements from 2026-10-18 on dualv4: two Xeon E5-2683 v4 CPUs,
-32 physical cores / 64 logical CPUs, 256 GiB installed RAM (251 GiB usable),
+32 physical cores / 64 logical CPUs, 256 GiB installed RAM (251.6 GiB usable),
 and an ext4 filesystem on NVMe. Every plot uses k29, 64 worker threads and
 direct I/O enabled. HDD and SSD refer to the **plot formats**; both were
 generated on NVMe, not separate HDD and SSD devices.
@@ -28,6 +28,31 @@ user's wallet. Their plot ID is
 Logs, plots and machine-readable results are retained in the output directory.
 Wall time and peak process RSS come from GNU time; checksum and subsequent
 native verification time are excluded from plotting time.
+
+## Results
+
+All four cases passed. Each configuration was run once, in the order below.
+
+| Storage mode | Plot format | Plotting time | Peak RSS | Plot size |
+| --- | --- | ---: | ---: | ---: |
+| RAM | HDD | 26m30s | 136.55 GiB | 36.60 GiB |
+| RAM | SSD | 24m45s | 136.54 GiB | 14.67 GiB |
+| Disk | HDD | 97m43s | 169.8 MiB | 36.60 GiB |
+| Disk | SSD | 95m14s | 177.2 MiB | 14.67 GiB |
+
+The HDD files are byte-for-byte identical between storage modes, as are the SSD
+files. HDD plots contain 39,295,838,764 bytes; SSD plots contain 15,756,205,612
+bytes. Each contains 541,139,108 final entries. The independent native C++ reader,
+quality lookup and full CPU verifier passed 64 sampled proofs per plot (256
+samples total), using the existing `mmx-node` build at revision
+`41f2e4ed205dfad9e64081e3501547d6db54cb52`.
+
+There were no direct-I/O fallback messages, and all plotting temporary files
+were removed after completion. Peak temporary disk usage was not measured.
+These k29 measurements do not establish sizing or compatibility for k30–k32;
+those sizes have not been plotted end-to-end. Exact timings, CPU time, RSS,
+SHA-256 digests, build details and native output are in the
+[machine-readable results](dualv4-k29.json).
 
 ## Pruning improvement
 

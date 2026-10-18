@@ -1,0 +1,106 @@
+{
+  "status": "passed",
+  "started": "2026-10-18T08:05:33.729165+00:00",
+  "finished": "2026-10-18T12:16:15.079706+00:00",
+  "revision": "f5aa994b0051b4b17ed0a6a87f813f065b3ef3fc",
+  "binary_sha256": "35f1cfece6e0ea3ea3e4a4ef848a1852c41c4374e4c8098eddc923cd5adacb9f",
+  "ksize": 29,
+  "threads": 64,
+  "direct_io": true,
+  "test_farmer_key": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+  "seed": "0000000000000000000000000000000000000000000000000000000000000000",
+  "native_samples_per_plot": 64,
+  "native_source_revision": "41f2e4ed205dfad9e64081e3501547d6db54cb52",
+  "host": "dualv4",
+  "artifacts": "dualv4:/home/mad/mmx-cpu-plotter-tests/k29-f5aa994",
+  "plot_id": "682a7fb5e4e712d6b4263052d99529ccd3d87a5d602b1535539c00fd0dcd8a3a",
+  "hardware": {
+    "cpu": "Intel(R) Xeon(R) CPU E5-2683 v4 @ 2.10GHz",
+    "sockets": 2,
+    "cores_per_socket": 16,
+    "logical_cpus": 64,
+    "memory_total_kib": 263778528,
+    "installed_ram_gib": 256,
+    "storage": "NVMe / ext4",
+    "kernel": "6.8.0-138-generic"
+  },
+  "build": {
+    "rustc": "rustc 1.97.0 (2d8144b78 2026-07-07)",
+    "rustflags": "-C target-cpu=native"
+  },
+  "cases": [
+    {
+      "mode": "ram",
+      "type": "hdd",
+      "seconds": 1589.57,
+      "user_seconds": 41434.77,
+      "system_seconds": 1006.41,
+      "max_rss_kib": 143181096,
+      "plot_bytes": 39295838764,
+      "sha256": "e76390d59a58bd6b92f252b71e59b876f642fd79a24814c4860d179cbc06cdfc",
+      "checksum_seconds": 134.81888940208592
+    },
+    {
+      "mode": "ram",
+      "type": "ssd",
+      "seconds": 1485.48,
+      "user_seconds": 41495.75,
+      "system_seconds": 993.62,
+      "max_rss_kib": 143177500,
+      "plot_bytes": 15756205612,
+      "sha256": "2e96ae21e7b15e3675c2cb553fe88099deabd180c4e64d4a4dbbd7e43326cdc8",
+      "checksum_seconds": 50.87711974303238
+    },
+    {
+      "mode": "disk",
+      "type": "hdd",
+      "seconds": 5863,
+      "user_seconds": 54479.66,
+      "system_seconds": 2264.26,
+      "max_rss_kib": 173868,
+      "plot_bytes": 39295838764,
+      "sha256": "e76390d59a58bd6b92f252b71e59b876f642fd79a24814c4860d179cbc06cdfc",
+      "checksum_seconds": 130.06765978201292
+    },
+    {
+      "mode": "disk",
+      "type": "ssd",
+      "seconds": 5713.66,
+      "user_seconds": 54331.47,
+      "system_seconds": 2264.12,
+      "max_rss_kib": 181432,
+      "plot_bytes": 15756205612,
+      "sha256": "2e96ae21e7b15e3675c2cb553fe88099deabd180c4e64d4a4dbbd7e43326cdc8",
+      "checksum_seconds": 53.41330111096613
+    }
+  ],
+  "baseline": {
+    "revision": "ff8208a80c6dae280675f37a323e7b09756406b4",
+    "binary_sha256": "1e17e5c40b01d08d10934e31f22b569644eeaef52c517a91041a30ab312c7d3a",
+    "plot_bytes": 39295838764,
+    "seconds": 2392.9,
+    "user_seconds": 38685.03,
+    "system_seconds": 522.34,
+    "max_rss_kib": 143182268,
+    "notes": "Single RAM/HDD reference run before parallel pruning; queue intentionally stopped after first plot. Final pruning/writing overlapped first optimized RAM/HDD leaf hashing.",
+    "native_samples": 256,
+    "native_status": "passed",
+    "sha256": "e76390d59a58bd6b92f252b71e59b876f642fd79a24814c4860d179cbc06cdfc",
+    "artifacts": "dualv4:/home/mad/mmx-cpu-plotter-tests/k29-ff8208a"
+  },
+  "native_output": [
+    "Native reader, qualities and CPU verifier passed 64 samples / 541139108 entries",
+    "Native reader, qualities and CPU verifier passed 64 samples / 541139108 entries",
+    "Native reader, qualities and CPU verifier passed 64 samples / 541139108 entries",
+    "Native reader, qualities and CPU verifier passed 64 samples / 541139108 entries"
+  ],
+  "direct_io_fallbacks": 0,
+  "temporary_cleanup_verified": true,
+  "notes": [
+    "HDD and SSD are plot formats; both were generated on NVMe.",
+    "One run per configuration; GNU time plotting durations exclude checksumming and native verification.",
+    "Baseline final pruning/writing overlapped initial leaf hashing of the optimized RAM/HDD run.",
+    "Peak temporary disk usage was not measured. k30-k32 have not been validated end-to-end.",
+    "Native checkout had unrelated service/UI edits and untracked assets; tracked C++ Prover/verifier sources were unmodified."
+  ]
+}
