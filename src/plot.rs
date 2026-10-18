@@ -11,10 +11,10 @@ use anyhow::{bail, ensure, Context, Result};
 use rayon::prelude::*;
 use sha2::{Digest, Sha256, Sha512};
 use std::{
-    io::{Read, Write},
+    io::{BufWriter, Read, Write},
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
     time::Instant,
@@ -186,18 +186,7 @@ fn run(options: &Options) -> Result<PlotResult> {
         check_cancel(options)?;
         let source = links[table].take().unwrap();
         let previous_count = links[table - 1].as_ref().unwrap().count;
-        let mut needed = LiveSet::new(previous_count)?;
-        let mut reader = source.data.reader()?;
-        for index in 0..source.count {
-            if index % (1 << 20) == 0 {
-                check_cancel(options)?;
-            }
-            let (l, r) = read_pair(&mut reader)?;
-            if active.as_ref().is_none_or(|live| live.contains(index)) {
-                needed.insert(l)?;
-                needed.insert(r)?;
-            }
-        }
+        let mut needed = mark_parents(&source, active.as_ref(), previous_count, options)?;
         let count = needed.build_index();
         ensure!(
             count <= domain,
@@ -205,28 +194,40 @@ fn run(options: &Options) -> Result<PlotResult> {
             table - 1,
             options.ksize
         );
-        let (data, mut writer) = storage.create_sized(source.count * 16)?;
-        let mut reader = source.data.reader()?;
+        let (data, writer) = storage.create_sized(source.count * 16)?;
+        let mut writer = BufWriter::with_capacity(BATCH * 16, writer);
         let mut kept = 0;
         let mut delta_bits = 0;
-        for index in 0..source.count {
-            let (l, r) = read_pair(&mut reader)?;
-            if active.as_ref().is_some_and(|live| !live.contains(index)) {
-                continue;
+        pair_batches(&source, options, |base, bytes| {
+            let remapped: Result<Vec<_>> = bytes
+                .par_chunks_exact(16)
+                .enumerate()
+                .with_min_len(MATCH_CHUNK)
+                .filter_map(|(offset, bytes)| {
+                    active
+                        .as_ref()
+                        .is_none_or(|live| live.contains(base + offset as u64))
+                        .then(|| pair_from_bytes(bytes))
+                })
+                .map(|(l, r)| {
+                    let l = needed.index(l);
+                    let r = needed.index(r);
+                    ensure!(r > l, "non-increasing match pointers");
+                    Ok((l, r, symbol_bits(r - l)?))
+                })
+                .collect();
+            for (l, r, bits) in remapped? {
+                delta_bits += bits as usize;
+                write_pair(&mut writer, l, r)?;
+                kept += 1;
+                if kept % PARK as u64 == 0 {
+                    max_pd_bytes = max_pd_bytes
+                        .max((PARK * options.ksize as usize + delta_bits).div_ceil(64) * 8);
+                    delta_bits = 0;
+                }
             }
-            let l = needed.index(l);
-            let r = needed.index(r);
-            ensure!(r > l, "non-increasing match pointers");
-            delta_bits += symbol_bits(r - l)? as usize;
-            write_pair(&mut writer, l, r)?;
-            kept += 1;
-            if kept % PARK as u64 == 0 {
-                max_pd_bytes =
-                    max_pd_bytes.max((PARK * options.ksize as usize + delta_bits).div_ceil(64) * 8);
-                delta_bits = 0;
-                check_cancel(options)?;
-            }
-        }
+            Ok(())
+        })?;
         if kept % PARK as u64 != 0 {
             delta_bits += (PARK - kept as usize % PARK) * 2;
             max_pd_bytes =
@@ -310,6 +311,69 @@ fn run(options: &Options) -> Result<PlotResult> {
         path.display()
     );
     Ok(PlotResult { path, header })
+}
+
+fn pair_batches(
+    source: &Table,
+    options: &Options,
+    mut visit: impl FnMut(u64, &[u8]) -> Result<()>,
+) -> Result<()> {
+    let mut reader = source.data.reader()?;
+    let mut buffer = vec![0; BATCH * 16];
+    for first in (0..source.count).step_by(BATCH) {
+        check_cancel(options)?;
+        let len = (source.count - first).min(BATCH as u64) as usize * 16;
+        reader.read_exact(&mut buffer[..len])?;
+        visit(first, &buffer[..len])?;
+    }
+    Ok(())
+}
+fn pair_from_bytes(bytes: &[u8]) -> (u64, u64) {
+    (
+        u64::from_le_bytes(bytes[..8].try_into().unwrap()),
+        u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
+    )
+}
+fn mark_parents(
+    source: &Table,
+    active: Option<&LiveSet>,
+    count: u64,
+    options: &Options,
+) -> Result<LiveSet> {
+    let bitmap: Vec<_> = LiveSet::new(count)?
+        .into_words()
+        .into_iter()
+        .map(AtomicU64::new)
+        .collect();
+    pair_batches(source, options, |base, bytes| {
+        bytes
+            .par_chunks_exact(16)
+            .enumerate()
+            .with_min_len(MATCH_CHUNK)
+            .try_for_each(|(offset, bytes)| -> Result<()> {
+                if active.is_some_and(|live| !live.contains(base + offset as u64)) {
+                    return Ok(());
+                }
+                let (l, r) = pair_from_bytes(bytes);
+                ensure!(
+                    l < count && r < count,
+                    "temporary pointer outside table of {count} entries"
+                );
+                let li = l as usize / 64;
+                let ri = r as usize / 64;
+                if li == ri {
+                    bitmap[li].fetch_or((1 << (l % 64)) | (1 << (r % 64)), Ordering::Relaxed);
+                } else {
+                    bitmap[li].fetch_or(1 << (l % 64), Ordering::Relaxed);
+                    bitmap[ri].fetch_or(1 << (r % 64), Ordering::Relaxed);
+                }
+                Ok(())
+            })
+    })?;
+    Ok(LiveSet::from_words(
+        count,
+        bitmap.into_iter().map(AtomicU64::into_inner).collect(),
+    ))
 }
 
 fn hash_pair(left: &[u32; 14], right: &[u32; 14], l: u64, r: u64, mask: u32) -> Entry {
@@ -580,7 +644,8 @@ fn read_group(
     Ok(())
 }
 fn extract_links(storage: &Storage, table: &SortedTable) -> Result<Table> {
-    let (data, mut writer) = storage.create_sized(table.count * 16)?;
+    let (data, writer) = storage.create_sized(table.count * 16)?;
+    let mut writer = BufWriter::with_capacity(BATCH * 16, writer);
     let mut reader = table.reader()?;
     while let Some(entry) = reader.next()? {
         write_pair(&mut writer, entry.left, entry.right)?;
@@ -591,7 +656,7 @@ fn extract_links(storage: &Storage, table: &SortedTable) -> Result<Table> {
         count: table.count,
     })
 }
-fn write_pair(writer: &mut dyn Write, left: u64, right: u64) -> Result<()> {
+fn write_pair<W: Write + ?Sized>(writer: &mut W, left: u64, right: u64) -> Result<()> {
     let mut bytes = [0; 16];
     bytes[..8].copy_from_slice(&left.to_le_bytes());
     bytes[8..].copy_from_slice(&right.to_le_bytes());
@@ -743,6 +808,63 @@ fn write_x(
 #[cfg(test)]
 mod matching_tests {
     use super::*;
+
+    #[test]
+    fn parallel_pruning_preserves_active_indices_and_shared_bitmap_words() {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap()
+            .install(|| {
+                let dir = tempfile::tempdir().unwrap();
+                let options = Options {
+                    ksize: 17,
+                    farmer_key: [0; 33],
+                    contract: None,
+                    seed: [0; 32],
+                    mode: Mode::Ram,
+                    ssd: false,
+                    output: dir.path().into(),
+                    temp_dir: dir.path().into(),
+                    threads: 4,
+                    direct_io: false,
+                    allow_small_k: true,
+                    cancelled: Arc::new(AtomicBool::new(false)),
+                };
+                let count = BATCH as u64 + 13;
+                let parent_count = count * 2;
+                let storage = Storage::new(Mode::Ram, dir.path(), false).unwrap();
+                let (data, mut writer) = storage.create().unwrap();
+                let mut active = LiveSet::new(count).unwrap();
+                let mut expected = vec![false; parent_count as usize];
+                for i in 0..count {
+                    let l = i * 17 % parent_count;
+                    let r = (l + 1) % parent_count;
+                    write_pair(&mut writer, l, r).unwrap();
+                    if i % 3 == 1 {
+                        active.insert(i).unwrap();
+                        expected[l as usize] = true;
+                        expected[r as usize] = true;
+                    }
+                }
+                writer.flush().unwrap();
+                drop(writer);
+                let mut result = mark_parents(
+                    &Table { data, count },
+                    Some(&active),
+                    parent_count,
+                    &options,
+                )
+                .unwrap();
+                assert_eq!(
+                    result.build_index(),
+                    expected.iter().filter(|v| **v).count() as u64
+                );
+                for (i, expected) in expected.into_iter().enumerate() {
+                    assert_eq!(result.contains(i as u64), expected, "parent {i}");
+                }
+            });
+    }
 
     #[test]
     fn disk_chunks_preserve_matches_and_global_pointers_across_y_group_boundaries() {

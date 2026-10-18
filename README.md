@@ -52,6 +52,8 @@ stacks and the OS's own memory use.
 Matching partitions the exact output into disjoint worker ranges. Disk mode uses
 the same parallel matching on bounded input chunks, carrying a complete Y group
 across each boundary so matches and parent indices remain identical.
+Pruning also streams bounded batches: workers mark shared parent bitmaps with
+atomic bit operations and remap live pointers in parallel, preserving table order.
 This mode requires substantially more RAM; it does not spill to disk. Temporary
 metadata records use 80 bytes per entry in RAM, and retained backtrace records
 use another 16 bytes per entry per table. Both the current and next tables can

@@ -53,6 +53,18 @@ impl LiveSet {
             len,
         })
     }
+    pub fn into_words(self) -> Vec<u64> {
+        self.words
+    }
+    pub fn from_words(len: u64, words: Vec<u64>) -> Self {
+        debug_assert_eq!(words.len() as u64, len.div_ceil(64));
+        Self {
+            words,
+            prefix: Vec::new(),
+            len,
+        }
+    }
+    #[cfg(test)]
     pub fn insert(&mut self, index: u64) -> Result<()> {
         ensure!(
             index < self.len,
