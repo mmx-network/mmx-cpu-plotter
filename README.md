@@ -94,6 +94,11 @@ python3 tools/bench_plot.py --ksize 20 --threads 4 --rounds 2
 # Optional independent native reader/qualities/full CPU proof check.
 # Requires an existing mmx-node CMake build, with test_pos_compute built.
 python3 tools/check_native.py --source ../mmx-node /plots/example.plot --samples 32
+
+# Explicit production test matrix. Retains four plots, logs, timing/RSS data,
+# checksums and native verification results in a new output directory.
+python3 tools/test_matrix.py --ksize 29 --threads 32 \
+  --output /plots/test-matrix --native-source ../mmx-node
 ```
 
 One local release-build run at k20 with four worker threads produced identical

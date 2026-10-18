@@ -21,7 +21,9 @@ use std::{
 };
 
 const PARK: usize = 2048;
-const BATCH: usize = 4096;
+// Coarse batches amortize worker-pool scheduling on many-core CPUs. Keeping the
+// work and result buffers below ~14 MiB still leaves disk-mode memory bounded.
+const BATCH: usize = 65536;
 const HEADER_SIZE: u64 = 4096;
 
 #[derive(Clone)]
@@ -124,10 +126,11 @@ fn run(options: &Options) -> Result<PlotResult> {
     for first in (0..domain).step_by(BATCH) {
         check_cancel(options)?;
         let count = (domain - first).min(BATCH as u64);
-        let entries: Vec<_> = (0..count)
+        let entries: Vec<_> = (0..count as usize)
             .into_par_iter()
+            .with_min_len(256)
             .map(|offset| {
-                let x = (first + offset) as u32;
+                let x = (first + offset as u64) as u32;
                 let (y, meta) = pos::compute_f1(x, &id, options.ksize).expect("validated ksize");
                 Entry {
                     y,
@@ -319,6 +322,7 @@ fn hash_matches(batch: &mut Vec<Match>, sorter: &mut Sorter<'_>, ksize: u8) -> R
     let mask = ((1u64 << ksize) - 1) as u32;
     let entries: Vec<_> = batch
         .par_iter()
+        .with_min_len(256)
         .map(|pair| {
             let mut message = [0; 112];
             for (dst, word) in message
@@ -373,11 +377,25 @@ fn match_table(
     } else {
         (None, None)
     };
-    let mut left = read_group(&mut reader, &mut pending, &mut index, &mut link_writer)?;
+    let mut left = Vec::new();
+    let mut right = Vec::new();
+    read_group(
+        &mut reader,
+        &mut pending,
+        &mut index,
+        &mut link_writer,
+        &mut left,
+    )?;
     let mut report = Instant::now();
     while !left.is_empty() {
         check_cancel(options)?;
-        let right = read_group(&mut reader, &mut pending, &mut index, &mut link_writer)?;
+        read_group(
+            &mut reader,
+            &mut pending,
+            &mut index,
+            &mut link_writer,
+            &mut right,
+        )?;
         if !right.is_empty() && left[0].1.y.checked_add(1) == Some(right[0].1.y) {
             for &(li, l) in &left {
                 for &(ri, r) in &right {
@@ -394,7 +412,7 @@ fn match_table(
                 }
             }
         }
-        left = right;
+        std::mem::swap(&mut left, &mut right);
         if report.elapsed().as_secs() >= 15 {
             eprintln!(
                 "T{table}: matched {:.1}% of input",
@@ -421,10 +439,11 @@ fn read_group(
     pending: &mut Option<Entry>,
     index: &mut u64,
     links: &mut Option<Box<dyn Write>>,
-) -> Result<Vec<(u64, Entry)>> {
-    let mut group = Vec::new();
+    group: &mut Vec<(u64, Entry)>,
+) -> Result<()> {
+    group.clear();
     let Some(first) = pending.take() else {
-        return Ok(group);
+        return Ok(());
     };
     group.push((*index, first));
     if let Some(writer) = links {
@@ -444,7 +463,7 @@ fn read_group(
             _ => break,
         }
     }
-    Ok(group)
+    Ok(())
 }
 fn extract_links(storage: &Storage, table: &SortedTable) -> Result<Table> {
     let (data, mut writer) = storage.create_sized(table.count * 16)?;

@@ -32,7 +32,10 @@ for mode in ("ram", "disk"):
                     raise SystemExit(result.stderr)
                 plot = next(directory.glob("*.plot"))
                 with plot.open("rb") as stream:
-                    digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                    checksum = hashlib.sha256()
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                        checksum.update(chunk)
+                    digest = checksum.hexdigest()
                 if expected is not None and digest != expected:
                     raise SystemExit("output changed between storage/I/O modes")
                 expected = digest
