@@ -1,0 +1,214 @@
+{
+  "date": "2026-10-19",
+  "plotter_base_revision": "441427b143ae285bffcf631644038b92cb1e2238",
+  "source_note": "Working plotter implementation tested before committing; binary digests identify the tested matrix builds. The isolated dualv4 copy has older Git metadata and was populated from this working source.",
+  "backend_revision": "ddc9d9a6bb69fec5c65a6b789257593c51c74187",
+  "backend_branch": "plotter-memhash-pipeline",
+  "cuda_reference_revision": "b03a655c6b0e985fb51fceb202d4b8973439eccd",
+  "implementation": {
+    "gpu_scope": "memhash only; both SHA-512 stages stay on CPU",
+    "api": "OpenCL 1.2; GPU devices only",
+    "fast_path": "NVIDIA vendor, verified 32-lane warp, compute capability >= 7; inline PTX shuffles and warp barriers",
+    "mixing_workgroup_threads": 128,
+    "hashes_per_mixing_workgroup": 4,
+    "generation_workgroup_threads": 256,
+    "vector_store_bytes": 16,
+    "queues": 3,
+    "entries_per_stream": 65536,
+    "scratch_bytes_per_stream": 268435456,
+    "device_io_bytes_per_stream": 12582912,
+    "pinned_host_bytes_per_stream": 12582912,
+    "smaller_nvidia_tile_entries": 16384,
+    "portable_tile_entries": 4096,
+    "continuous_t1_stream": true,
+    "steady_state_blocking_transfers": false,
+    "steady_state_clFinish": false
+  },
+  "local": {
+    "cpu": "Intel Core Ultra 7 265KF",
+    "gpu": "NVIDIA GeForce RTX 4070 SUPER",
+    "build": "generic CPU release target",
+    "benchmark": {
+      "count": 1000000,
+      "ksize": 29,
+      "plot_id": "0000000000000000000000000000000000000000000000000000000000000000",
+      "cpu_threads": 4,
+      "rounds": [
+        {
+          "cpu_seconds": 2.3369,
+          "portable_blocking_seconds": 0.5109,
+          "pipeline_seconds": 0.1514
+        },
+        {
+          "cpu_seconds": 2.4537,
+          "portable_blocking_seconds": 0.4721,
+          "pipeline_seconds": 0.163
+        },
+        {
+          "cpu_seconds": 2.3698,
+          "portable_blocking_seconds": 0.3421,
+          "pipeline_seconds": 0.153
+        }
+      ],
+      "profiling": {
+        "batches": 16,
+        "entries_per_stream": 65536,
+        "mean_device_ms_per_batch": {
+          "upload": 0.161,
+          "generation": 0.732,
+          "mixing": 2.26,
+          "download": 0.313
+        },
+        "pairwise_kernel_overlap_ms": 1.166,
+        "pairwise_copy_compute_overlap_ms": 0.495
+      }
+    },
+    "matrix": {
+      "binary_sha256": "d5cf59471dfef419568cbc5fe28b2f85fb29e2d95ede4ba03596c41ce61edcea",
+      "ksize": 20,
+      "threads": 4,
+      "direct_io": true,
+      "native_samples_per_plot": 16,
+      "native_source_revision": "5626ac2b7cd26aa9626ea3b2cf864b4cfe6fbcd2",
+      "artifact_root": "/tmp/mmx-warp-k20",
+      "cases": [
+        {
+          "mode": "ram",
+          "type": "hdd",
+          "seconds": 2.06,
+          "max_rss_kib": 313244,
+          "plot_bytes": 52179044,
+          "sha256": "7542d96f65625a229d4663e8d930418decc431c381dcf18b260d66b61706c59c"
+        },
+        {
+          "mode": "ram",
+          "type": "ssd",
+          "seconds": 2.21,
+          "max_rss_kib": 313088,
+          "plot_bytes": 21643364,
+          "sha256": "ba59e344a428495781c4d3f2ed02731c6e3a91f2de75bf4949438a290de1a4c1"
+        },
+        {
+          "mode": "disk",
+          "type": "hdd",
+          "seconds": 5.45,
+          "max_rss_kib": 217588,
+          "plot_bytes": 52179044,
+          "sha256": "7542d96f65625a229d4663e8d930418decc431c381dcf18b260d66b61706c59c"
+        },
+        {
+          "mode": "disk",
+          "type": "ssd",
+          "seconds": 6.36,
+          "max_rss_kib": 217144,
+          "plot_bytes": 21643364,
+          "sha256": "ba59e344a428495781c4d3f2ed02731c6e3a91f2de75bf4949438a290de1a4c1"
+        }
+      ]
+    }
+  },
+  "dualv4": {
+    "cpu": "2 x Xeon E5-2683 v4",
+    "gpu": "NVIDIA GeForce RTX 4060 Ti",
+    "build": "RUSTFLAGS=-C target-cpu=native",
+    "benchmark": {
+      "count": 2000000,
+      "ksize": 29,
+      "plot_id": "0000000000000000000000000000000000000000000000000000000000000000",
+      "cpu_threads": 64,
+      "rounds": [
+        {
+          "cpu_seconds": 1.2626,
+          "portable_blocking_seconds": 1.0206,
+          "pipeline_seconds": 0.3083
+        },
+        {
+          "cpu_seconds": 1.2871,
+          "portable_blocking_seconds": 1.0142,
+          "pipeline_seconds": 0.3114
+        },
+        {
+          "cpu_seconds": 1.2937,
+          "portable_blocking_seconds": 1.009,
+          "pipeline_seconds": 0.315
+        }
+      ],
+      "profiling": {
+        "batches": 16,
+        "entries_per_stream": 65536,
+        "mean_device_ms_per_batch": {
+          "upload": 0.698,
+          "generation": 2.284,
+          "mixing": 6.125,
+          "download": 1.254
+        },
+        "pairwise_kernel_overlap_ms": 38.973,
+        "pairwise_copy_compute_overlap_ms": 30.813
+      }
+    },
+    "matrix": {
+      "binary_sha256": "ce49ecbb7edeb411786b78f1cf2cfc585fa9fdb2e7f01cbafe8d79c5206f2e3f",
+      "ksize": 20,
+      "threads": 64,
+      "direct_io": true,
+      "native_samples_per_plot": 16,
+      "native_source_revision": "41f2e4ed205dfad9e64081e3501547d6db54cb52",
+      "artifact_root": "/home/mad/mmx-cpu-plotter-tests/opencl-warp-k20",
+      "cases": [
+        {
+          "mode": "ram",
+          "type": "hdd",
+          "seconds": 2.96,
+          "max_rss_kib": 312504,
+          "plot_bytes": 52179044,
+          "sha256": "7542d96f65625a229d4663e8d930418decc431c381dcf18b260d66b61706c59c"
+        },
+        {
+          "mode": "ram",
+          "type": "ssd",
+          "seconds": 2.71,
+          "max_rss_kib": 312464,
+          "plot_bytes": 21643364,
+          "sha256": "ba59e344a428495781c4d3f2ed02731c6e3a91f2de75bf4949438a290de1a4c1"
+        },
+        {
+          "mode": "disk",
+          "type": "hdd",
+          "seconds": 7.26,
+          "max_rss_kib": 217468,
+          "plot_bytes": 52179044,
+          "sha256": "7542d96f65625a229d4663e8d930418decc431c381dcf18b260d66b61706c59c"
+        },
+        {
+          "mode": "disk",
+          "type": "ssd",
+          "seconds": 7.12,
+          "max_rss_kib": 218112,
+          "plot_bytes": 21643364,
+          "sha256": "ba59e344a428495781c4d3f2ed02731c6e3a91f2de75bf4949438a290de1a4c1"
+        }
+      ]
+    }
+  },
+  "checksums": {
+    "hdd": "7542d96f65625a229d4663e8d930418decc431c381dcf18b260d66b61706c59c",
+    "ssd": "ba59e344a428495781c4d3f2ed02731c6e3a91f2de75bf4949438a290de1a4c1"
+  },
+  "validation": [
+    "Every complete F1 result matches the CPU reference in all timed rounds",
+    "Fast and portable GPU paths match CPU vectors, including partially occupied final workgroups and k32 X-domain limits",
+    "Both GPUs passed k20 RAM/disk and HDD/SSD matrices with direct I/O and CPU-identical checksums",
+    "Native reader, qualities and CPU verifier passed 16 sampled 256-X proofs per matrix file",
+    "Pipeline tests cover ring wrap, ordered output, callback failure, drain/reuse, independent retirement and outstanding DMA at drop",
+    "All-target real-GPU tests, shared real-GPU tests, Clippy with -D warnings, Rust 1.89 and formatting passed",
+    "Mock CPU-only and mixed ICD tests confirm GPU-only enumeration and selection"
+  ],
+  "limits": [
+    "Shared machines; performance varies with other workloads",
+    "F1 timings include CPU SHA-512, transfers and output collection; not whole-plot production speedups",
+    "Portable blocking baseline uses the vector-store generator but no NVIDIA warp fast path or pipelining",
+    "Profiled stage averages include interference from concurrent queues; pairwise overlap sums can double count three-way overlap",
+    "Full k29 GPU plotting has not been tested; complete plot matrices use k20",
+    "No CUDA runtime benchmark was run; the CUDA source was used to port the memhash execution layout"
+  ]
+}

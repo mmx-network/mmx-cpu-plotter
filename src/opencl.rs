@@ -22,8 +22,20 @@ impl MemHashOpenCl {
     }
     /// Profiling records GPU stage timestamps; normal plotting leaves it off.
     pub fn new_profiled(index: usize, profiling: bool) -> Result<Self> {
-        let mut engine =
-            mmx_opencl::OpenCl::new(index, None, true)?.into_memory_pipeline(profiling)?;
+        Self::build(index, profiling, false)
+    }
+    /// Portable GPU reference used for correctness/performance comparisons.
+    pub fn new_portable(index: usize) -> Result<Self> {
+        Self::build(index, false, true)
+    }
+    fn build(index: usize, profiling: bool, portable: bool) -> Result<Self> {
+        let engine = if portable {
+            mmx_opencl::OpenCl::new_portable(index, None, true)?
+        } else {
+            mmx_opencl::OpenCl::new(index, None, true)?
+        };
+        let batch = engine.preferred_memory_batch();
+        let mut engine = engine.into_memory_pipeline_with_batch(profiling, batch)?;
         let keys = [[0; 64], [0xff; 64], std::array::from_fn(|i| i as u8)];
         engine.prepare(0, keys.len())?.copy_from_slice(&keys);
         engine.submit(0)?;
@@ -38,6 +50,12 @@ impl MemHashOpenCl {
             engine,
             profiles: Vec::new(),
         })
+    }
+    pub fn batch_size(&self) -> usize {
+        self.engine.batch_size()
+    }
+    pub fn memory_kernel(&self) -> &'static str {
+        self.engine.memory_kernel()
     }
     pub fn device(&self) -> &DeviceInfo {
         self.engine.device()
@@ -99,9 +117,10 @@ impl MemHashOpenCl {
         ksize: u8,
         consume: &mut impl FnMut(u64, &[F1Value]) -> Result<()>,
     ) -> Result<()> {
-        use mmx_opencl::{MEMORY_BATCH, MEMORY_PIPELINE_DEPTH};
-        let batches = count.div_ceil(MEMORY_BATCH as u64) as usize;
-        let mut values = vec![(0, [0; pos::N_META]); MEMORY_BATCH];
+        use mmx_opencl::MEMORY_PIPELINE_DEPTH;
+        let batch_size = self.engine.batch_size();
+        let batches = count.div_ceil(batch_size as u64) as usize;
+        let mut values = vec![(0, [0; pos::N_META]); batch_size];
         for tick in 0..batches + MEMORY_PIPELINE_DEPTH {
             let mut retired = None;
             if tick >= MEMORY_PIPELINE_DEPTH {
@@ -122,8 +141,8 @@ impl MemHashOpenCl {
                 retired = Some((batch, values.len()));
             }
             if tick < batches {
-                let offset = tick as u64 * MEMORY_BATCH as u64;
-                let len = (count - offset).min(MEMORY_BATCH as u64) as usize;
+                let offset = tick as u64 * batch_size as u64;
+                let len = (count - offset).min(batch_size as u64) as usize;
                 let keys = self.engine.prepare(tick % MEMORY_PIPELINE_DEPTH, len)?;
                 keys.par_iter_mut()
                     .enumerate()
@@ -137,7 +156,7 @@ impl MemHashOpenCl {
                 // Refill the vacated stream before calling the sorter, so all
                 // three queues can advance during a slow callback or disk write.
                 consume(
-                    first as u64 + batch as u64 * MEMORY_BATCH as u64,
+                    first as u64 + batch as u64 * batch_size as u64,
                     &values[..len],
                 )?;
             }
@@ -155,8 +174,9 @@ mod tests {
             return;
         }
         let mut gpu = MemHashOpenCl::new(0).expect("OpenCL GPU required by MMX_OPENCL_TESTS=1");
+        let mut portable = MemHashOpenCl::new_portable(0).expect("portable OpenCL GPU required");
         let id = std::array::from_fn(|i| (i * 137) as u8);
-        // Cross the shared backend's 4096-key scratch batch, and exercise reuse.
+        // Cross the portable backend's 4096-key batch, and exercise both kernels.
         for (k, first, count) in [
             (16, 23, 4097),
             (16, 31, 3 * mmx_opencl::MEMORY_BATCH + 17),
@@ -172,6 +192,7 @@ mod tests {
                 .map(|i| pos::compute_f1(first + i as u32, &id, k).unwrap())
                 .collect();
             assert_eq!(gpu.compute_f1(first, count, &id, k).unwrap(), expected);
+            assert_eq!(portable.compute_f1(first, count, &id, k).unwrap(), expected);
         }
         assert!(gpu.compute_f1(0, 65537, &id, 29).is_err());
         assert!(gpu.compute_f1(u32::MAX, 2, &id, 32).is_err());
@@ -189,8 +210,9 @@ mod pipeline_tests {
         }
         let mut gpu = MemHashOpenCl::new(0).unwrap();
         let mut calls = 0;
+        let count = 4 * gpu.batch_size() as u64 + 17;
         let error = gpu
-            .for_each_f1(0, 65537, &[3; 32], 17, |_, _| {
+            .for_each_f1(0, count, &[3; 32], 20, |_, _| {
                 calls += 1;
                 anyhow::bail!("cancelled by test")
             })
@@ -210,23 +232,21 @@ mod pipeline_tests {
             return;
         }
         let mut gpu = MemHashOpenCl::new_profiled(0, true).unwrap();
+        let count = (4 * gpu.batch_size() + 17).max(65536 + 17);
         let mut actual = Vec::new();
-        gpu.for_each_f1(23, 65537, &[9; 32], 17, |first, values| {
+        gpu.for_each_f1(23, count as u64, &[9; 32], 20, |first, values| {
             assert_eq!(first, 23 + actual.len() as u64);
             actual.extend_from_slice(values);
             Ok(())
         })
         .unwrap();
-        let expected: Vec<_> = (23..23 + 65537)
+        let expected: Vec<_> = (23..23 + count as u32)
             .into_par_iter()
-            .map(|x| pos::compute_f1(x, &[9; 32], 17).unwrap())
+            .map(|x| pos::compute_f1(x, &[9; 32], 20).unwrap())
             .collect();
         assert_eq!(actual, expected);
         let profiles = gpu.take_profiles();
-        assert_eq!(
-            profiles.len(),
-            65537usize.div_ceil(mmx_opencl::MEMORY_BATCH)
-        );
+        assert_eq!(profiles.len(), count.div_ceil(gpu.batch_size()));
         for (i, profile) in profiles.iter().enumerate() {
             assert_eq!(profile.slot, i % mmx_opencl::MEMORY_PIPELINE_DEPTH);
             for stage in &profile.stages {

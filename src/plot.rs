@@ -128,10 +128,12 @@ fn run(options: &Options) -> Result<PlotResult> {
         .context("initialize OpenCL memhash")?;
     if let Some(gpu) = &gpu {
         eprintln!(
-            "Memhash: OpenCL GPU {}: {} ({})",
+            "Memhash: OpenCL GPU {}: {} ({}), {} kernel, {} entries/stream",
             gpu.device().index,
             gpu.device().name,
-            gpu.device().platform
+            gpu.device().platform,
+            gpu.memory_kernel(),
+            gpu.batch_size()
         );
     }
     let storage = Storage::new(options.mode, &options.temp_dir, options.direct_io)

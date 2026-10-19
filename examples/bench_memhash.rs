@@ -20,7 +20,8 @@ fn main() -> Result<()> {
         .num_threads(threads)
         .build()?;
     let mut gpu = MemHashOpenCl::new(device)?;
-    let mut blocking = mmx_opencl::OpenCl::new(device, None, true)?;
+    println!("kernel={}, tile={}", gpu.memory_kernel(), gpu.batch_size());
+    let mut blocking = mmx_opencl::OpenCl::new_portable(device, None, true)?;
     println!(
         "GPU {}: {}; {count} F1 values at k29; {threads} CPU threads",
         device,
@@ -63,13 +64,30 @@ fn main() -> Result<()> {
         })?;
         let gpu_time = start.elapsed().as_secs_f64();
         ensure!(actual == expected, "OpenCL F1 mismatch");
-        println!("round {round}: CPU {cpu_time:.4}s ({:.0} X/s), blocking {blocking_time:.4}s ({:.0} X/s), pipeline {gpu_time:.4}s ({:.0} X/s), {:.2}x vs CPU, {:.2}x vs blocking", count as f64 / cpu_time, count as f64 / blocking_time, count as f64 / gpu_time, cpu_time / gpu_time, blocking_time / gpu_time);
+        println!("round {round}: CPU {cpu_time:.4}s ({:.0} X/s), portable blocking {blocking_time:.4}s ({:.0} X/s), pipeline {gpu_time:.4}s ({:.0} X/s), {:.2}x vs CPU, {:.2}x vs portable blocking", count as f64 / cpu_time, count as f64 / blocking_time, count as f64 / gpu_time, cpu_time / gpu_time, blocking_time / gpu_time);
     }
     // Profile outside the timed runs. Record actual device overlap, including
     // transfers versus kernels, rather than inferring it from host submissions.
     let mut profiled = MemHashOpenCl::new_profiled(device, true)?;
-    pool.install(|| profiled.for_each_f1(0, count.min(65536) as u64, &id, 29, |_, _| Ok(())))?;
+    pool.install(|| {
+        profiled.for_each_f1(
+            0,
+            count.min(profiled.batch_size() * 16) as u64,
+            &id,
+            29,
+            |_, _| Ok(()),
+        )
+    })?;
     let profiles = profiled.take_profiles();
+    let mut totals = [0u64; 4];
+    for profile in &profiles {
+        for (total, stage) in totals.iter_mut().zip(&profile.stages) {
+            *total += stage.end - stage.start;
+        }
+    }
+    println!("mean device ms/batch ({} entries): upload {:.3}, generation {:.3}, mixing {:.3}, download {:.3}", profiled.batch_size(),
+        totals[0] as f64 / profiles.len() as f64 / 1e6, totals[1] as f64 / profiles.len() as f64 / 1e6,
+        totals[2] as f64 / profiles.len() as f64 / 1e6, totals[3] as f64 / profiles.len() as f64 / 1e6);
     let mut kernel_overlap = 0;
     let mut copy_overlap = 0;
     for (i, a) in profiles.iter().enumerate() {
@@ -95,7 +113,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-// Former synchronous execution order, retained here only as a timing baseline.
+// Portable kernel and former synchronous order, retained as a timing baseline.
 fn blocking_f1(
     engine: &mut mmx_opencl::OpenCl,
     count: usize,

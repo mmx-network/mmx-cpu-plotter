@@ -87,11 +87,14 @@ GPU operation requires an OpenCL 1.2 GPU driver and runtime loader. Device listi
 and selection include only devices reporting `CL_DEVICE_TYPE_GPU`; CPU OpenCL
 implementations are excluded. An explicitly requested GPU must initialize and pass a CPU comparison before plotting starts;
 errors abort without publishing a plot. Omitting `--opencl` selects the CPU path.
-The backend pipelines three 4,096-entry streams through separate OpenCL queues
+The backend pipelines three streams through separate OpenCL queues
 with reusable device buffers and pinned host storage. CPU SHA-512 work,
 transfers, GPU kernels and consumption by the sorter overlap across batches;
-completion events guard buffer reuse. The streams use 48 MiB of device scratch
-in total, plus 2.25 MiB each of device I/O buffers and pinned host storage.
+completion events guard buffer reuse. Supported NVIDIA GPUs use warp shuffles
+and 65,536-entry streams, following the CUDA plotter's memhash layout. These use
+768 MiB of device scratch in total, plus 36 MiB each of device I/O buffers and
+pinned host storage. Smaller NVIDIA GPUs use 16,384 entries per stream; other
+GPUs use the portable kernel with 4,096 entries per stream.
 GPU resources are released after T1, before subsequent table matching.
 Driver/context memory is additional.
 See [OpenCL measurements and validation](docs/opencl.md).
