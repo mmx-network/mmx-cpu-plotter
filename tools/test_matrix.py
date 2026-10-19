@@ -42,11 +42,17 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--ksize", type=int, choices=range(8, 33), required=True)
     parser.add_argument("--threads", type=int, required=True)
+    parser.add_argument("--opencl", action="store_true", help="offload only table-1 memhash to OpenCL")
+    parser.add_argument("--opencl-device", type=int)
     parser.add_argument("--native-source", type=Path)
     parser.add_argument("--samples", type=int, default=64)
     args = parser.parse_args()
     if args.threads < 1 or args.samples < 1:
         parser.error("threads and samples must be positive")
+    if args.opencl_device is not None and (args.opencl_device < 0 or not args.opencl):
+        parser.error("--opencl-device requires --opencl and a nonnegative index")
+    if args.opencl_device is None:
+        args.opencl_device = 0
     binary = args.binary.resolve()
     root = args.output.resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -56,6 +62,9 @@ def main():
     repository = Path(__file__).resolve().parents[1]
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip()
     report = {"started": now(), "revision": revision, "binary_sha256": checksum(binary), "ksize": args.ksize, "threads": args.threads, "direct_io": True, "test_farmer_key": KEY, "seed": "00" * 32, "cases": [], "status": "running"}
+    report["opencl_device"] = args.opencl_device if args.opencl else None
+    if args.opencl:
+        report["opencl_devices"] = subprocess.check_output([str(binary), "--list-opencl-devices"], text=True).strip()
     report["hardware"] = json.loads(subprocess.check_output(["lscpu", "--json"], text=True))
 
     def save():
@@ -75,6 +84,8 @@ def main():
                 report["cases"].append(case)
                 save()
                 command = [str(binary), "--farmer-key", KEY, "--ksize", str(args.ksize), "--seed", "00" * 32, "--mode", mode, "--threads", str(args.threads), "--output", str(directory)]
+                if args.opencl:
+                    command.extend(["--opencl", "--opencl-device", str(args.opencl_device)])
                 if args.ksize < 29:
                     command.append("--allow-small-k")
                 if kind == "ssd":

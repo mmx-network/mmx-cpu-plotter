@@ -1,3 +1,6 @@
 [submodule "vendor/vnx-rust"]
 	path = vendor/vnx-rust
 	url = https://github.com/mmx-network/vnx-rust.git
+[submodule "vendor/mmx-rust-node"]
+	path = vendor/mmx-rust-node
+	url = https://github.com/mmx-network/mmx-rust-node.git

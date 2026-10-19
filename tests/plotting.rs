@@ -26,6 +26,7 @@ fn options(output: &Path, mode: Mode) -> Options {
         threads: 2,
         allow_small_k: true,
         direct_io: true,
+        opencl_device: None,
         cancelled: Arc::new(AtomicBool::new(false)),
     }
 }
@@ -233,5 +234,40 @@ fn failure_does_not_leave_temporary_tables_or_publish_a_plot() {
         .unwrap_err()
         .to_string()
         .contains("too many live entries"));
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn opencl_memhash_plots_are_byte_identical_in_both_modes_and_formats() {
+    if std::env::var("MMX_OPENCL_TESTS").as_deref() != Ok("1") {
+        return;
+    }
+    for ssd in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cpu = options(dir.path(), Mode::Ram);
+        cpu.ssd = ssd;
+        let result = plot(&cpu).unwrap();
+        let expected = std::fs::read(result.path).unwrap();
+        for mode in [Mode::Ram, Mode::Disk] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut gpu = options(dir.path(), mode);
+            gpu.ssd = ssd;
+            gpu.opencl_device = Some(0);
+            let result = plot(&gpu).unwrap();
+            let actual = std::fs::read(result.path).unwrap();
+            assert_eq!(actual, expected, "{mode:?}, SSD={ssd}");
+            check_plot(&actual, &result.header);
+        }
+    }
+}
+#[test]
+fn explicitly_requested_unavailable_gpu_fails_before_creating_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut options = options(dir.path(), Mode::Disk);
+    options.opencl_device = Some(usize::MAX);
+    assert!(plot(&options)
+        .unwrap_err()
+        .to_string()
+        .contains("initialize OpenCL memhash"));
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
 }

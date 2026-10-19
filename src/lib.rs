@@ -1,6 +1,7 @@
 //! Native C0 MMX CPU plotting, using RAM or external merge sorting on disk.
 mod encoding;
 mod io;
+pub mod opencl;
 mod plot;
 pub mod pos;
 mod sort;

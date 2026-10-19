@@ -14,8 +14,8 @@ use std::{
 #[command(version, about = "CPU plotter for native MMX C0 HDD and SSD plots")]
 struct Args {
     /// Compressed secp256k1 farmer public key (66 hex digits)
-    #[arg(short = 'f', long)]
-    farmer_key: String,
+    #[arg(short = 'f', long, required_unless_present = "list_opencl_devices")]
+    farmer_key: Option<String>,
     /// Plot NFT contract: mmx1... Bech32m address or 64 hex digits
     #[arg(short = 'c', long)]
     contract: Option<String>,
@@ -36,6 +36,15 @@ struct Args {
     /// CPU worker threads (defaults to available parallelism)
     #[arg(short = 'r', long)]
     threads: Option<usize>,
+    /// Use OpenCL for table-1 memhash (all SHA-512 hashing stays on CPU)
+    #[arg(long)]
+    opencl: bool,
+    /// OpenCL GPU index from --list-opencl-devices (defaults to 0)
+    #[arg(long, requires = "opencl")]
+    opencl_device: Option<usize>,
+    /// List OpenCL GPUs and exit
+    #[arg(long)]
+    list_opencl_devices: bool,
     #[arg(short = 'n', long, default_value_t = 1)]
     count: usize,
     /// Reproducible 32-byte seed in hex; allowed only with --count 1
@@ -75,12 +84,28 @@ fn contract(s: &str) -> Result<[u8; 32]> {
 }
 fn run() -> Result<()> {
     let args = Args::parse();
+    if args.list_opencl_devices {
+        let devices = mmx_cpu_plotter::opencl::devices()?;
+        ensure!(!devices.is_empty(), "no OpenCL GPUs found");
+        for device in devices {
+            println!(
+                "GPU {}: {} ({})",
+                device.index, device.name, device.platform
+            );
+        }
+        return Ok(());
+    }
     ensure!(args.count > 0, "count must be positive");
     ensure!(
         args.seed.is_none() || args.count == 1,
         "--seed requires --count 1 to avoid duplicate plots"
     );
-    let farmer_key = decode_hex(&args.farmer_key).context("farmer key")?;
+    let farmer_key = decode_hex(
+        args.farmer_key
+            .as_deref()
+            .context("--farmer-key is required")?,
+    )
+    .context("farmer key")?;
     let contract = args.contract.as_deref().map(contract).transpose()?;
     let cancelled = Arc::new(AtomicBool::new(false));
     let handler_cancelled = cancelled.clone();
@@ -102,6 +127,7 @@ fn run() -> Result<()> {
             .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, usize::from)),
         allow_small_k: args.allow_small_k,
         direct_io: args.direct_io,
+        opencl_device: args.opencl.then_some(args.opencl_device.unwrap_or(0)),
         cancelled,
     };
     for index in 0..args.count {
@@ -128,6 +154,26 @@ fn main() {
 mod tests {
     use super::*;
     use bech32::ToBase32;
+    #[test]
+    fn opencl_is_opt_in_and_device_listing_needs_no_farmer_key() {
+        assert!(!Args::parse_from(["plotter", "--farmer-key", "key"]).opencl);
+        let args = Args::parse_from([
+            "plotter",
+            "--farmer-key",
+            "key",
+            "--opencl",
+            "--opencl-device",
+            "2",
+        ]);
+        assert!(args.opencl);
+        assert_eq!(args.opencl_device, Some(2));
+        assert!(
+            Args::try_parse_from(["plotter", "--farmer-key", "key", "--opencl-device", "2"])
+                .is_err()
+        );
+        assert!(Args::parse_from(["plotter", "--list-opencl-devices"]).list_opencl_devices);
+        assert!(Args::try_parse_from(["plotter"]).is_err());
+    }
     #[test]
     fn direct_io_defaults_on_and_can_be_disabled() {
         assert!(Args::parse_from(["plotter", "--farmer-key", "key"]).direct_io);

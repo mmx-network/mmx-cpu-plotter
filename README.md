@@ -72,6 +72,25 @@ length. Unsupported filesystems fall back to buffered I/O with a diagnostic.
 Use `--direct-io=false` to disable it. RAM mode still uses this flag for the final
 plot. Device and filesystem caches beyond the OS page cache remain independent.
 
+OpenCL can offload **only table-1 memhash** to a GPU. All SHA-512 hashing,
+matching, sorting and pruning use the CPU. Enable it explicitly:
+
+```sh
+./target/release/mmx-cpu-plotter --list-opencl-devices
+./target/release/mmx-cpu-plotter --farmer-key YOUR_66_DIGIT_HEX_KEY \
+  --ksize 29 --mode ram --threads 16 --opencl --opencl-device 0 --output /plots
+```
+
+The shared `mmx-opencl` implementation comes from the pinned
+`vendor/mmx-rust-node` submodule. CPU operation needs no OpenCL installation;
+GPU operation requires an OpenCL 1.2 GPU driver and runtime loader. An explicitly
+requested GPU must initialize and pass a CPU comparison before plotting starts;
+errors abort without publishing a plot. Omitting `--opencl` selects the CPU path.
+The backend reuses at most 16 MiB of device scratch plus input/output buffers;
+host batches contain at most 65,536 entries. GPU resources are released after
+T1, before subsequent table matching. Driver/context memory is additional.
+See [OpenCL measurements and validation](docs/opencl.md).
+
 Other options:
 
 - `--count N`: create N plots, each with a fresh OS-random 32-byte seed.
@@ -102,6 +121,12 @@ python3 tools/bench_plot.py --ksize 20 --threads 4 --rounds 2
 # Isolate CPU leaf hashing from sorting and disk I/O (count, threads).
 cargo run --release --example bench_f1 -- 200000 64
 
+# Compare full F1 work with CPU-only versus GPU memhash (count, threads, GPU).
+cargo run --release --locked --example bench_memhash -- 2000000 64 0
+
+# Require real GPU tests; compares CPU/GPU output, including complete plots.
+MMX_OPENCL_TESTS=1 cargo test --all-targets --locked
+
 # Optional independent native reader/qualities/full CPU proof check.
 # Requires an existing mmx-node CMake build, with test_pos_compute built.
 python3 tools/check_native.py --source ../mmx-node /plots/example.plot --samples 32
@@ -110,6 +135,7 @@ python3 tools/check_native.py --source ../mmx-node /plots/example.plot --samples
 # checksums and native verification results in a new output directory.
 python3 tools/test_matrix.py --ksize 29 --threads 32 \
   --output /plots/test-matrix --native-source ../mmx-node
+# Add --opencl --opencl-device 0 to test GPU memhash in all four cases.
 ```
 
 An earlier local release-build run at k20 with four worker threads produced

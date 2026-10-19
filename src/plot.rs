@@ -2,6 +2,7 @@ use crate::{
     encoding::{line_point, symbol_bits, write_bits, write_symbol, LiveSet},
     io::{PlotWriter, Policy},
     mmx::PlotHeader,
+    opencl::MemHashOpenCl,
     pos,
     sort::{Entry, EntryReader, SortedTable, Sorter, Table},
     storage::{Mode, Storage},
@@ -39,6 +40,8 @@ pub struct Options {
     pub temp_dir: PathBuf,
     pub threads: usize,
     pub direct_io: bool,
+    /// Offload only the table-1 memory hash to this OpenCL GPU.
+    pub opencl_device: Option<usize>,
     /// Small plots are useful for compatibility tests, but cannot be farmed on mainnet.
     pub allow_small_k: bool,
     pub cancelled: Arc<AtomicBool>,
@@ -118,6 +121,19 @@ fn run(options: &Options) -> Result<PlotResult> {
         options.ksize,
         options.threads
     );
+    let mut gpu = options
+        .opencl_device
+        .map(MemHashOpenCl::new)
+        .transpose()
+        .context("initialize OpenCL memhash")?;
+    if let Some(gpu) = &gpu {
+        eprintln!(
+            "Memhash: OpenCL GPU {}: {} ({})",
+            gpu.device().index,
+            gpu.device().name,
+            gpu.device().platform
+        );
+    }
     let storage = Storage::new(options.mode, &options.temp_dir, options.direct_io)
         .context("create plotting temporary storage")?;
     let mut sorter = Sorter::new(&storage);
@@ -127,20 +143,32 @@ fn run(options: &Options) -> Result<PlotResult> {
     for first in (0..domain).step_by(BATCH) {
         check_cancel(options)?;
         let count = (domain - first).min(BATCH as u64);
-        let entries: Vec<_> = (0..count as usize)
-            .into_par_iter()
-            .with_min_len(256)
-            .map(|offset| {
-                let x = (first + offset as u64) as u32;
-                let (y, meta) = pos::compute_f1(x, &id, options.ksize).expect("validated ksize");
-                Entry {
-                    y,
-                    meta,
-                    left: x as u64,
-                    right: 0,
-                }
-            })
-            .collect();
+        let to_entry = |(offset, (y, meta))| Entry {
+            y,
+            meta,
+            left: first + offset as u64,
+            right: 0,
+        };
+        let entries: Vec<_> = if let Some(gpu) = &mut gpu {
+            gpu.compute_f1(first as u32, count as usize, &id, options.ksize)?
+                .into_par_iter()
+                .enumerate()
+                .with_min_len(256)
+                .map(to_entry)
+                .collect()
+        } else {
+            (0..count as usize)
+                .into_par_iter()
+                .with_min_len(256)
+                .map(|offset| {
+                    to_entry((
+                        offset,
+                        pos::compute_f1((first + offset as u64) as u32, &id, options.ksize)
+                            .expect("validated ksize"),
+                    ))
+                })
+                .collect()
+        };
         for entry in entries {
             sorter.push(entry)?;
         }
@@ -153,6 +181,7 @@ fn run(options: &Options) -> Result<PlotResult> {
             report = Instant::now();
         }
     }
+    drop(gpu);
     let mut current = sorter.finish()?;
     let mut links: Vec<Option<Table>> = (0..10).map(|_| None).collect();
     eprintln!(
@@ -828,6 +857,7 @@ mod matching_tests {
                     temp_dir: dir.path().into(),
                     threads: 4,
                     direct_io: false,
+                    opencl_device: None,
                     allow_small_k: true,
                     cancelled: Arc::new(AtomicBool::new(false)),
                 };
@@ -885,6 +915,7 @@ mod matching_tests {
                     temp_dir: dir.path().into(),
                     threads: 4,
                     direct_io: false,
+                    opencl_device: None,
                     allow_small_k: true,
                     cancelled: Arc::new(AtomicBool::new(false)),
                 };

@@ -93,16 +93,27 @@ fn hash_meta(bytes: &[u8], kmask: u32) -> (u32, [u32; N_META]) {
     }
     (y & kmask, meta)
 }
-pub fn compute_f1(x: u32, id: &Hash, ksize: u8) -> Result<(u32, [u32; N_META])> {
-    let kmask = mask(ksize)?;
+pub(crate) fn f1_key(x: u32, id: &Hash) -> [u8; 64] {
     let mut message = [0; 36];
     message[..4].copy_from_slice(&x.to_le_bytes());
     message[4..].copy_from_slice(id);
-    let key: [u8; 64] = Sha512::digest(message).into();
+    Sha512::digest(message).into()
+}
+pub(crate) fn f1_from_memory(
+    key: &[u8; 64],
+    memory: &[u8; 128],
+    ksize: u8,
+) -> Result<(u32, [u32; N_META])> {
+    let kmask = mask(ksize)?;
     let mut bytes = [0; 192];
-    bytes[..64].copy_from_slice(&key);
-    bytes[64..].copy_from_slice(&memory_hash(&key));
+    bytes[..64].copy_from_slice(key);
+    bytes[64..].copy_from_slice(memory);
     Ok(hash_meta(&bytes, kmask))
+}
+pub fn compute_f1(x: u32, id: &Hash, ksize: u8) -> Result<(u32, [u32; N_META])> {
+    mask(ksize)?;
+    let key = f1_key(x, id);
+    f1_from_memory(&key, &memory_hash(&key), ksize)
 }
 /// Native compute(..., xbits=0), including deduplicated X input, metadata sorting,
 /// all eight match tables, final full-metadata deduplication and proof backtrace.
