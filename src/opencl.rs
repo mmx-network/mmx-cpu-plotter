@@ -5,6 +5,8 @@ use anyhow::{ensure, Context, Result};
 pub use mmx_opencl::DeviceInfo;
 use rayon::prelude::*;
 
+/// Only GPU devices are exposed. CPU OpenCL implementations are excluded, and
+/// indices use the same GPU-only discovery order as MemHashOpenCl::new.
 pub fn devices() -> Result<Vec<DeviceInfo>> {
     Ok(mmx_opencl::devices(None, true)?)
 }

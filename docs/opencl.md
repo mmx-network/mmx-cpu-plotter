@@ -12,7 +12,10 @@ plot format is unchanged.
 
 `--opencl` is opt-in; its default device is 0. The shared `mmx-opencl` backend is
 pinned through `vendor/mmx-rust-node`. CPU operation needs no OpenCL SDK or runtime;
-GPU operation requires an OpenCL 1.2 GPU driver/runtime. The requested GPU must
+GPU operation requires an OpenCL 1.2 GPU driver/runtime. Listing and selection
+filter for `CL_DEVICE_TYPE_GPU` and verify each returned device's type. CPU OpenCL
+implementations are excluded, with no fallback to a CPU OpenCL device. Device
+indices refer to the GPU-only list. The requested GPU must
 initialize and match CPU test keys before temporary plotting data is created.
 Failures abort the run and clean up temporary data and incomplete output.
 

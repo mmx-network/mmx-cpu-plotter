@@ -83,8 +83,9 @@ matching, sorting and pruning use the CPU. Enable it explicitly:
 
 The shared `mmx-opencl` implementation comes from the pinned
 `vendor/mmx-rust-node` submodule. CPU operation needs no OpenCL installation;
-GPU operation requires an OpenCL 1.2 GPU driver and runtime loader. An explicitly
-requested GPU must initialize and pass a CPU comparison before plotting starts;
+GPU operation requires an OpenCL 1.2 GPU driver and runtime loader. Device listing
+and selection include only devices reporting `CL_DEVICE_TYPE_GPU`; CPU OpenCL
+implementations are excluded. An explicitly requested GPU must initialize and pass a CPU comparison before plotting starts;
 errors abort without publishing a plot. Omitting `--opencl` selects the CPU path.
 The backend pipelines three 4,096-entry streams through separate OpenCL queues
 with reusable device buffers and pinned host storage. CPU SHA-512 work,
