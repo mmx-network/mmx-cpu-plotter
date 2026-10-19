@@ -86,9 +86,13 @@ The shared `mmx-opencl` implementation comes from the pinned
 GPU operation requires an OpenCL 1.2 GPU driver and runtime loader. An explicitly
 requested GPU must initialize and pass a CPU comparison before plotting starts;
 errors abort without publishing a plot. Omitting `--opencl` selects the CPU path.
-The backend reuses at most 16 MiB of device scratch plus input/output buffers;
-host batches contain at most 65,536 entries. GPU resources are released after
-T1, before subsequent table matching. Driver/context memory is additional.
+The backend pipelines three 4,096-entry streams through separate OpenCL queues
+with reusable device buffers and pinned host storage. CPU SHA-512 work,
+transfers, GPU kernels and consumption by the sorter overlap across batches;
+completion events guard buffer reuse. The streams use 48 MiB of device scratch
+in total, plus 2.25 MiB each of device I/O buffers and pinned host storage.
+GPU resources are released after T1, before subsequent table matching.
+Driver/context memory is additional.
 See [OpenCL measurements and validation](docs/opencl.md).
 
 Other options:

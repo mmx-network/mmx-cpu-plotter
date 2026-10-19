@@ -140,45 +140,58 @@ fn run(options: &Options) -> Result<PlotResult> {
     let domain = 1u64 << options.ksize;
     sorter.reserve_expected(domain)?;
     let mut report = Instant::now();
-    for first in (0..domain).step_by(BATCH) {
-        check_cancel(options)?;
-        let count = (domain - first).min(BATCH as u64);
-        let to_entry = |(offset, (y, meta))| Entry {
-            y,
-            meta,
-            left: first + offset as u64,
-            right: 0,
-        };
-        let entries: Vec<_> = if let Some(gpu) = &mut gpu {
-            gpu.compute_f1(first as u32, count as usize, &id, options.ksize)?
-                .into_par_iter()
-                .enumerate()
-                .with_min_len(256)
-                .map(to_entry)
-                .collect()
-        } else {
-            (0..count as usize)
+    if let Some(gpu) = &mut gpu {
+        gpu.for_each_f1(0, domain, &id, options.ksize, |first, values| {
+            check_cancel(options)?;
+            for (offset, &(y, meta)) in values.iter().enumerate() {
+                sorter.push(Entry {
+                    y,
+                    meta,
+                    left: first + offset as u64,
+                    right: 0,
+                })?;
+            }
+            if report.elapsed().as_secs() >= 15 {
+                let done = first + values.len() as u64;
+                eprintln!(
+                    "T1: {:.1}% ({:.0} X/s)",
+                    done as f64 * 100. / domain as f64,
+                    done as f64 / started.elapsed().as_secs_f64()
+                );
+                report = Instant::now();
+            }
+            Ok(())
+        })?;
+    } else {
+        for first in (0..domain).step_by(BATCH) {
+            check_cancel(options)?;
+            let count = (domain - first).min(BATCH as u64);
+            let entries: Vec<_> = (0..count as usize)
                 .into_par_iter()
                 .with_min_len(256)
                 .map(|offset| {
-                    to_entry((
-                        offset,
-                        pos::compute_f1((first + offset as u64) as u32, &id, options.ksize)
-                            .expect("validated ksize"),
-                    ))
+                    let x = (first + offset as u64) as u32;
+                    let (y, meta) =
+                        pos::compute_f1(x, &id, options.ksize).expect("validated ksize");
+                    Entry {
+                        y,
+                        meta,
+                        left: x as u64,
+                        right: 0,
+                    }
                 })
-                .collect()
-        };
-        for entry in entries {
-            sorter.push(entry)?;
-        }
-        if report.elapsed().as_secs() >= 15 {
-            eprintln!(
-                "T1: {:.1}% ({:.0} X/s)",
-                (first + count) as f64 * 100. / domain as f64,
-                (first + count) as f64 / started.elapsed().as_secs_f64()
-            );
-            report = Instant::now();
+                .collect();
+            for entry in entries {
+                sorter.push(entry)?;
+            }
+            if report.elapsed().as_secs() >= 15 {
+                eprintln!(
+                    "T1: {:.1}% ({:.0} X/s)",
+                    (first + count) as f64 * 100. / domain as f64,
+                    (first + count) as f64 / started.elapsed().as_secs_f64()
+                );
+                report = Instant::now();
+            }
         }
     }
     drop(gpu);
